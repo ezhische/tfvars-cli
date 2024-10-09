@@ -1,0 +1,63 @@
+name: build
+
+on:
+  push:
+    tags:
+      - '*'  # Trigger on all tag pushes
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Set repo base name
+        id: repo-name
+        run: echo "REPO_NAME=$(basename ${{ github.repository }})" >> $GITHUB_ENV
+
+      - name: Extract tag
+        id: extract-tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Set target platforms
+        id: platforms
+        run: |
+          echo "PLATFORMS=linux/amd64,linux/arm64,windows/amd64,darwin/amd64,darwin/arm64" >> $GITHUB_ENV
+
+      - name: Build for different platforms
+        env:
+          REPO_NAME: ${{ env.REPO_NAME }}
+          PLATFORMS: ${{ env.PLATFORMS }}
+          VERSION: ${{ env.TAG }}
+        run: |
+          platforms=(${PLATFORMS//,/ })
+          for platform in "${platforms[@]}"; do
+            os=$(echo $platform | cut -d'/' -f1)
+            arch=$(echo $platform | cut -d'/' -f2)
+            output_name="${REPO_NAME}-${os}-${arch}"
+            
+            if [ "$os" = "windows" ]; then
+              output_name="${output_name}.exe"
+            fi
+
+            # Build the binary
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -buildvcs=false -ldflags="-s -w -X main.version=${VERSION}" -o "$output_name" ./cmd
+
+            # Archive the binary as .tar.gz or .zip for Windows
+            if [ "$os" = "windows" ]; then
+              zip "${output_name}.zip" "$output_name"
+            else
+              tar czf "${output_name}.tar.gz" "$output_name"
+            fi
+          done
+
+      - name: Upload artifacts for release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ github.workspace }}/*.tar.gz
+            ${{ github.workspace }}/*.zip
